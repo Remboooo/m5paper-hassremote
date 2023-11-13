@@ -36,6 +36,8 @@ const char* WAKEUP_REASON_STRINGS[] = {
     "BT",           //!< Wakeup caused by BT (light sleep only)
 };
 
+M5EPD_Canvas drawCanvas(&M5.EPD);
+
 void testPrintText() {
     M5EPD_Canvas Info(&M5.EPD);
     Info.createCanvas(540, 50);
@@ -66,6 +68,9 @@ void setup() {
 
     M5.EPD.Clear(true);
 
+    drawCanvas.createCanvas(540, 960);
+    drawCanvas.fillCanvas(0);
+
     testPrintText();
 
     log_d("done");
@@ -79,13 +84,20 @@ void deep_sleep_with_touch_wakeup() {
 }
 
 void light_sleep_with_touch_wakeup() {
-    gpio_pullup_en(GPIO_NUM_36);
-    //esp_sleep_enable_ext0_wakeup(GPIO_NUM_36, LOW); // TOUCH_INT
+    esp_sleep_enable_ext0_wakeup(GPIO_NUM_36, LOW); // TOUCH_INT
     esp_light_sleep_start();
 }
 
 void loop() {
-    static int i = 0;
+    M5.TP.update();
+
+    for (int finger = 0; finger < M5.TP.getFingerNum(); ++finger) {
+        drawCanvas.fillCircle(M5.TP.readFingerX(finger), M5.TP.readFingerY(finger), M5.TP.readFingerSize(finger), 15);
+    }
+
+    if (M5.TP.getFingerNum()) {
+        drawCanvas.pushCanvas(0, 0, UPDATE_MODE_DU);
+    }
+
     light_sleep_with_touch_wakeup();
-    log_i("Wakeup %d cause %s", ++i, WAKEUP_REASON_STRINGS[esp_sleep_get_wakeup_cause()]);
 }
