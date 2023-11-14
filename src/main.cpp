@@ -6,6 +6,9 @@
 
 RTC_DATA_ATTR bool started = false;
 
+extern const uint8_t _binary_binres_images_test_bin_start[];
+extern const uint8_t _binary_binres_images_test_bin_end[];
+
 const char* RESET_REASON_STRINGS[] = {
     "UNKNOWN",
     "POWERON",    //!< Reset due to power-on event
@@ -36,7 +39,44 @@ const char* WAKEUP_REASON_STRINGS[] = {
     "BT",           //!< Wakeup caused by BT (light sleep only)
 };
 
-M5EPD_Canvas drawCanvas(&M5.EPD);
+class RemCanvas : public M5EPD_Canvas {
+public:
+    RemCanvas(M5EPD_Driver *driver) : M5EPD_Canvas(driver), driver(driver) {}
+
+    using M5EPD_Canvas::pushCanvas;
+
+    void pushCanvas(int32_t x, int32_t y, int32_t partX, int32_t partY, int32_t partW, int32_t partH, m5epd_update_mode_t mode) {
+        int32_t roundedX = partX & ~3;
+        int32_t roundedY = partY & ~3;
+
+        partW += partX - roundedX;
+        partH += partY - roundedY;
+        
+        partW = (partW + 3) & ~3;
+        partH = (partH + 3) & ~3;
+
+        partX = roundedX;
+        partY = roundedY;
+        
+        uint8_t* buf = (uint8_t*)malloc((partW * partH + 1) / 2);
+
+        auto y2 = partY + partH;
+        for (int32_t ny = 0; ny < partH; ++ny) {
+            // memset(&buf[ny * partW/2], ny&4 ? 0xFF : 0x00, partW/2);
+            memcpy(&buf[ny * partW/2], &_img8[(partY + ny) * (_iwidth/2) + partX/2], partW/2);
+        }
+
+        driver->WritePartGram4bpp(x + partX, y + partY, partW, partH, buf);
+        driver->UpdateArea(x + partX, y + partY, partW, partH, mode);
+
+        free(buf);
+    }
+
+private:
+    M5EPD_Driver *driver;
+};
+
+RemCanvas drawCanvas(&M5.EPD);
 
 void testPrintText() {
     M5EPD_Canvas Info(&M5.EPD);
@@ -70,6 +110,10 @@ void setup() {
 
     drawCanvas.createCanvas(540, 960);
     drawCanvas.fillCanvas(0);
+    
+    log_i("Pointer lol %p - %p = %u", _binary_binres_images_test_bin_start, _binary_binres_images_test_bin_end, (unsigned)(_binary_binres_images_test_bin_end - _binary_binres_images_test_bin_start));
+    drawCanvas.pushImage(540/2-128/2, 200, 128, 128, _binary_binres_images_test_bin_start);
+    drawCanvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
 
     testPrintText();
 
@@ -89,15 +133,34 @@ void light_sleep_with_touch_wakeup() {
 }
 
 void loop() {
+    log_d("wake");
+    static bool wasFingerUp = true;
+
     M5.TP.update();
 
-    for (int finger = 0; finger < M5.TP.getFingerNum(); ++finger) {
-        drawCanvas.fillCircle(M5.TP.readFingerX(finger), M5.TP.readFingerY(finger), M5.TP.readFingerSize(finger), 15);
+    uint16_t prevX = 0xFFFF, prevY = 0xFFFF, prevS = 0xFFFF;
+
+    while (M5.TP.getFingerNum()) {
+        auto x = M5.TP.readFingerX(0);
+        auto y = M5.TP.readFingerY(0);
+        auto s = M5.TP.readFingerSize(0);
+
+        if (prevX != x || prevY != y || prevS != s) {
+            log_d("CIRKELTJE %u %u %u", (unsigned) x, (unsigned) y, (unsigned) s);
+            drawCanvas.fillCircle(x, y, s/2, 15);
+            drawCanvas.pushCanvas(0, 0, x-s/2, y-s/2, s, s, UPDATE_MODE_DU);
+        }
+
+        prevX = x;
+        prevY = y;
+        prevS = s;
+
+        M5.TP.update();
     }
 
-    if (M5.TP.getFingerNum()) {
-        drawCanvas.pushCanvas(0, 0, UPDATE_MODE_DU);
-    }
-
+    // M5.disableEPDPower();
     light_sleep_with_touch_wakeup();
+    // M5.enableEPDPower();
+    // delay(1000);
+    // M5.EPD.begin(M5EPD_SCK_PIN, M5EPD_MOSI_PIN, M5EPD_MISO_PIN, M5EPD_CS_PIN, M5EPD_BUSY_PIN);
 }
