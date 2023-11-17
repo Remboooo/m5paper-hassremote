@@ -3,11 +3,9 @@
 
 #include "Free_Fonts.h"
 #include "util/stringutil.hpp"
+#include "generated/images.h"
 
 RTC_DATA_ATTR bool started = false;
-
-extern const uint8_t _binary_binres_images_test_bin_start[];
-extern const uint8_t _binary_binres_images_test_bin_end[];
 
 const char* RESET_REASON_STRINGS[] = {
     "UNKNOWN",
@@ -62,7 +60,6 @@ public:
 
         auto y2 = partY + partH;
         for (int32_t ny = 0; ny < partH; ++ny) {
-            // memset(&buf[ny * partW/2], ny&4 ? 0xFF : 0x00, partW/2);
             memcpy(&buf[ny * partW/2], &_img8[(partY + ny) * (_iwidth/2) + partX/2], partW/2);
         }
 
@@ -111,8 +108,8 @@ void setup() {
     drawCanvas.createCanvas(540, 960);
     drawCanvas.fillCanvas(0);
     
-    log_i("Pointer lol %p - %p = %u", _binary_binres_images_test_bin_start, _binary_binres_images_test_bin_end, (unsigned)(_binary_binres_images_test_bin_end - _binary_binres_images_test_bin_start));
-    drawCanvas.pushImage(540/2-128/2, 200, 128, 128, _binary_binres_images_test_bin_start);
+    log_i("Pointer lol %p - %p = %u", IMAGE_TEST_START, IMAGE_TEST_END, (unsigned)(IMAGE_TEST_LENGTH));
+    drawCanvas.pushImage(540/2-128/2, 200, 128, 128, IMAGE_TEST_START);
     drawCanvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
 
     testPrintText();
@@ -128,37 +125,68 @@ void deep_sleep_with_touch_wakeup() {
 }
 
 void light_sleep_with_touch_wakeup() {
+    log_d("sleep");
+    delay(50);
     esp_sleep_enable_ext0_wakeup(GPIO_NUM_36, LOW); // TOUCH_INT
     esp_light_sleep_start();
+}
+
+class TouchHandler {
+protected:
+    void handleTouch(uint16_t x, uint16_t y, uint16_t s, bool down) {
+        if (down) {
+            log_d("CIRKELTJE %u %u %u", (unsigned) x, (unsigned) y, (unsigned) s);
+            drawCanvas.fillCircle(x, y, s/2, 15);
+            drawCanvas.pushCanvas(0, 0, x-s/2, y-s/2, s, s, UPDATE_MODE_DU);
+        }
+    }
+
+public:
+    void touchUpdate(uint16_t x, uint16_t y, uint16_t s, bool down) {
+        if (prevX != x || prevY != y || prevS != s || prevDown != down) {
+            handleTouch(x, y, s, down);
+            prevX = x;
+            prevY = y;
+            prevS = s;
+            prevDown = down;
+        }
+    }
+
+private:
+    uint16_t prevX = 0xFFFF, prevY = 0xFFFF, prevS = 0xFFFF;
+    bool prevDown = false;
+};
+
+bool updateTpIfAvailable() {
+    if (M5.TP.available()) {
+        M5.TP.update();
+        return true;
+    } else {
+        delay(25); // Update frequency is 48Hz
+        if (M5.TP.available()) {
+            M5.TP.update();
+            return true;
+        }
+    }
+    return false;
 }
 
 void loop() {
     log_d("wake");
     static bool wasFingerUp = true;
+    static TouchHandler touchHandler;
 
-    M5.TP.update();
+    M5.EPD.Active();
 
-    uint16_t prevX = 0xFFFF, prevY = 0xFFFF, prevS = 0xFFFF;
-
-    while (M5.TP.getFingerNum()) {
+    while (updateTpIfAvailable()) {
         auto x = M5.TP.readFingerX(0);
         auto y = M5.TP.readFingerY(0);
         auto s = M5.TP.readFingerSize(0);
-
-        if (prevX != x || prevY != y || prevS != s) {
-            log_d("CIRKELTJE %u %u %u", (unsigned) x, (unsigned) y, (unsigned) s);
-            drawCanvas.fillCircle(x, y, s/2, 15);
-            drawCanvas.pushCanvas(0, 0, x-s/2, y-s/2, s, s, UPDATE_MODE_DU);
-        }
-
-        prevX = x;
-        prevY = y;
-        prevS = s;
-
-        M5.TP.update();
+        auto fingerDown = !M5.TP.isFingerUp();
+        touchHandler.touchUpdate(x, y, s, fingerDown);
     }
 
-    // M5.disableEPDPower();
+    M5.EPD.Sleep();
     light_sleep_with_touch_wakeup();
     // M5.enableEPDPower();
     // delay(1000);
